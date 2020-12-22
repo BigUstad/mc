@@ -29,11 +29,12 @@ import (
 )
 
 var ilmAddCmd = cli.Command{
-	Name:   "add",
-	Usage:  "add a lifecycle configuration rule to existing (if any) rule(s) on a bucket",
-	Action: mainILMAdd,
-	Before: setGlobalsFromContext,
-	Flags:  append(ilmAddFlags, globalFlags...),
+	Name:         "add",
+	Usage:        "add a lifecycle configuration rule to existing (if any) rule(s) on a bucket",
+	Action:       mainILMAdd,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(ilmAddFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -51,12 +52,17 @@ EXAMPLES:
      {{.Prompt}} {{.HelpName}} --expiry-days "200" myminio/mybucket
 
   2. Add expiry and transition date rules on a prefix in mybucket.
-     {{.Prompt}} {{.HelpName}} -expiry-date "2025-09-17" --transition-date "2025-05-01" \
-          --storage-class "GLACIER" myminio/mybucket/doc
+     {{.Prompt}} {{.HelpName}} --expiry-date "2025-09-17" --transition-date "2025-05-01" \
+          --storage-class "GLACIER" s3/mybucket/doc
 
   3. Add expiry and transition days rules on a prefix in mybucket.
-     {{.Prompt}} {{.HelpName}} -expiry-days "300" --transition-days "200" \
-          --storage-class "GLACIER" myminio/mybucket/doc
+     {{.Prompt}} {{.HelpName}} --expiry-days "300" --transition-days "200" \
+          --storage-class "GLACIER" s3/mybucket/doc
+
+  4. Add expiry and transition days rules on a prefix in mybucket for a MinIO transition target specified by label "hdd_tier".
+     "hdd_tier" is the label specified when adding a remote target with "mc admin bucket remote add --service ilm --label hdd_tier"
+     {{.Prompt}} {{.HelpName}} --expiry-days "300" --transition-days "200" \
+          --storage-class "hdd_tier" myminio/mybucket/doc
 `,
 }
 
@@ -83,7 +89,7 @@ var ilmAddFlags = []cli.Flag{
 	},
 	cli.StringFlag{
 		Name:  "storage-class",
-		Usage: "storage class for transition (STANDARD_IA, ONEZONE_IA, GLACIER. Etc)",
+		Usage: "storage class for transition (STANDARD_IA, ONEZONE_IA, GLACIER. Etc). For setting up transition to a MinIO target, use the label defined for the target",
 	},
 	cli.BoolFlag{
 		Name:  "disable",

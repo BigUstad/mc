@@ -43,11 +43,12 @@ var tagRemoveFlags = []cli.Flag{
 }
 
 var tagRemoveCmd = cli.Command{
-	Name:   "remove",
-	Usage:  "remove tags assigned to a bucket or an object",
-	Action: mainRemoveTag,
-	Before: setGlobalsFromContext,
-	Flags:  append(tagRemoveFlags, globalFlags...),
+	Name:         "remove",
+	Usage:        "remove tags assigned to a bucket or an object",
+	Action:       mainRemoveTag,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(tagRemoveFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -155,7 +156,7 @@ func mainRemoveTag(cliCtx *cli.Context) error {
 	if timeRef.IsZero() && !withVersions {
 		deleteTags(ctx, clnt, versionID, true)
 	} else {
-		for content := range clnt.List(ctx, ListOptions{timeRef: timeRef, withOlderVersions: withVersions}) {
+		for content := range clnt.List(ctx, ListOptions{TimeRef: timeRef, WithOlderVersions: withVersions}) {
 			if content.Err != nil {
 				fatalIf(content.Err.Trace(), "Unable to list target "+targetURL)
 			}

@@ -32,6 +32,7 @@ import (
 	"github.com/minio/cli"
 	"github.com/minio/mc/pkg/probe"
 	"github.com/minio/minio/pkg/console"
+	"github.com/minio/minio/pkg/trie"
 	"github.com/minio/minio/pkg/words"
 	"github.com/pkg/profile"
 
@@ -121,10 +122,54 @@ func Main(args []string) {
 	}
 }
 
+// Function invoked when invalid flag is passed
+func onUsageError(ctx *cli.Context, err error, subcommand bool) error {
+	type subCommandHelp struct {
+		flagName string
+		usage    string
+	}
+
+	// Calculate the maximum width of the flag name field
+	// for a good looking printing
+	var help = make([]subCommandHelp, len(ctx.Command.Flags))
+	maxWidth := 0
+	for i, f := range ctx.Command.Flags {
+		s := strings.Split(f.String(), "\t")
+		if len(s[0]) > maxWidth {
+			maxWidth = len(s[0])
+		}
+
+		help[i] = subCommandHelp{flagName: s[0], usage: s[1]}
+	}
+	maxWidth += 2
+
+	var errMsg strings.Builder
+
+	// Do the good-looking printing now
+	fmt.Fprintln(&errMsg, "Invalid command usage,", err.Error())
+	fmt.Fprintln(&errMsg, "")
+	fmt.Fprintln(&errMsg, "SUPPORTED FLAGS:")
+	for _, h := range help {
+		spaces := string(bytes.Repeat([]byte{' '}, maxWidth-len(h.flagName)))
+		fmt.Fprintf(&errMsg, "   %s%s%s\n", h.flagName, spaces, h.usage)
+	}
+	console.Fatal(errMsg.String())
+	return err
+}
+
 // Function invoked when invalid command is passed.
-func commandNotFound(ctx *cli.Context, command string) {
-	msg := fmt.Sprintf("`%s` is not a mc command. See `mc --help`.", command)
-	closestCommands := findClosestCommands(command)
+func commandNotFound(ctx *cli.Context, cmds []cli.Command) {
+	command := ctx.Args().First()
+	if command == "" {
+		cli.ShowCommandHelp(ctx, command)
+		return
+	}
+	msg := fmt.Sprintf("`%s` is not a recognized command. Get help using `--help` flag.", command)
+	var commandsTree = trie.NewTrie()
+	for _, cmd := range cmds {
+		commandsTree.Insert(cmd.Name)
+	}
+	closestCommands := findClosestCommands(commandsTree, command)
 	if len(closestCommands) > 0 {
 		msg += "\n\nDid you mean one of these?\n"
 		if len(closestCommands) == 1 {
@@ -242,8 +287,15 @@ func installAutoCompletion() {
 		return
 	}
 
+	shellName := os.Getenv("SHELL")
+	if shellName == "" {
+		shellName = "$SHELL"
+	} else {
+		shellName = filepath.Base(shellName)
+	}
+
 	if completeinstall.IsInstalled(filepath.Base(os.Args[0])) || completeinstall.IsInstalled("mc") {
-		console.Infoln("autocompletion is already enabled in your '$SHELLRC'")
+		console.Infoln("autocompletion is already enabled in your '" + shellName + "' shell.")
 		return
 	}
 
@@ -251,7 +303,7 @@ func installAutoCompletion() {
 	if err != nil {
 		fatalIf(probe.NewError(err), "Unable to install auto-completion.")
 	} else {
-		console.Infoln("enabled autocompletion in '$SHELLRC'. Please restart your shell.")
+		console.Infoln("enabled autocompletion in your '" + shellName + "' rc file. Please restart your shell.")
 	}
 }
 
@@ -280,7 +332,7 @@ func registerBefore(ctx *cli.Context) error {
 }
 
 // findClosestCommands to match a given string with commands trie tree.
-func findClosestCommands(command string) []string {
+func findClosestCommands(commandsTree *trie.Trie, command string) []string {
 	closestCommands := commandsTree.PrefixMatch(command)
 	sort.Strings(closestCommands)
 	// Suggest other close commands - allow missed, wrongly added and even transposed characters
@@ -337,7 +389,7 @@ var appCmds = []cli.Command{
 	diffCmd,
 	rmCmd,
 	versionCmd,
-	bucketILMCmd,
+	ilmCmd,
 	encryptCmd,
 	eventCmd,
 	watchCmd,
@@ -351,10 +403,6 @@ var appCmds = []cli.Command{
 }
 
 func registerApp(name string) *cli.App {
-	for _, cmd := range appCmds {
-		registerCmd(cmd)
-	}
-
 	cli.HelpFlag = cli.BoolFlag{
 		Name:  "help, h",
 		Usage: "show help",
@@ -374,7 +422,12 @@ func registerApp(name string) *cli.App {
 			return nil
 		}
 
-		cli.ShowAppHelp(ctx)
+		if ctx.Args().First() != "" {
+			commandNotFound(ctx, app.Commands)
+		} else {
+			cli.ShowAppHelp(ctx)
+		}
+
 		return exitStatus(globalErrorExitStatus)
 	}
 
@@ -388,13 +441,13 @@ func registerApp(name string) *cli.App {
 
 	app.HideHelpCommand = true
 	app.Usage = "MinIO Client for cloud storage and filesystems."
-	app.Commands = commands
+	app.Commands = appCmds
 	app.Author = "MinIO, Inc."
 	app.Version = ReleaseTag
 	app.Flags = append(mcFlags, globalFlags...)
 	app.CustomAppHelpTemplate = mcHelpTemplate
-	app.CommandNotFound = commandNotFound // handler function declared above.
 	app.EnableBashCompletion = true
+	app.OnUsageError = onUsageError
 
 	return app
 }

@@ -53,11 +53,12 @@ var (
 )
 
 var undoCmd = cli.Command{
-	Name:   "undo",
-	Usage:  "undo PUT/DELETE operations",
-	Action: mainUndo,
-	Before: setGlobalsFromContext,
-	Flags:  append(undoFlags, globalFlags...),
+	Name:         "undo",
+	Usage:        "undo PUT/DELETE operations",
+	Action:       mainUndo,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(undoFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -198,10 +199,10 @@ func undoURL(ctx context.Context, aliasedURL string, last int, recursive, dryRun
 	)
 
 	for content := range clnt.List(ctx, ListOptions{
-		isRecursive:       recursive,
-		withOlderVersions: true,
-		withDeleteMarkers: true,
-		showDir:           DirNone,
+		Recursive:         recursive,
+		WithOlderVersions: true,
+		WithDeleteMarkers: true,
+		ShowDir:           DirNone,
 	}) {
 		if content.Err != nil {
 			fatalIf(content.Err.Trace(clnt.GetURL().String()), "Unable to list folder.")

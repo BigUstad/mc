@@ -18,7 +18,9 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/minio/cli"
 	json "github.com/minio/mc/pkg/colorjson"
@@ -27,17 +29,19 @@ import (
 	"github.com/minio/minio/pkg/console"
 )
 
+var legalHoldSubcommands = []cli.Command{
+	legalHoldSetCmd,
+	legalHoldClearCmd,
+	legalHoldInfoCmd,
+}
+
 var legalHoldCmd = cli.Command{
-	Name:   "legalhold",
-	Usage:  "manage legal hold for object(s)",
-	Action: mainLegalHold,
-	Before: setGlobalsFromContext,
-	Flags:  globalFlags,
-	Subcommands: []cli.Command{
-		legalHoldSetCmd,
-		legalHoldClearCmd,
-		legalHoldInfoCmd,
-	},
+	Name:        "legalhold",
+	Usage:       "manage legal hold for object(s)",
+	Action:      mainLegalHold,
+	Before:      setGlobalsFromContext,
+	Flags:       globalFlags,
+	Subcommands: legalHoldSubcommands,
 }
 
 // Structured message depending on the type of console.
@@ -75,26 +79,40 @@ func (l legalHoldCmdMessage) JSON() string {
 	return string(msgBytes)
 }
 
-// Check if the bucket corresponding to the target url has
-// object locking enabled, this to show a pretty error message
-func checkBucketLockSupport(ctx context.Context, aliasedURL string) {
+var errBucketLockConfigNotFound = errors.New("bucket lock config not found")
+
+func isBucketLockEnabled(ctx context.Context, aliasedURL string) (bool, *probe.Error) {
+	st, err := getBucketLockStatus(ctx, aliasedURL)
+	if err == nil {
+		return st == "Enabled", nil
+	}
+	if err.ToGoError() == errBucketLockConfigNotFound {
+		return false, nil
+	}
+	return false, err
+}
+
+// Check if the bucket corresponding to the target url has object locking enabled
+func getBucketLockStatus(ctx context.Context, aliasedURL string) (status string, err *probe.Error) {
 	clnt, err := newClient(aliasedURL)
 	if err != nil {
-		fatalIf(err.Trace(), "Unable to parse the provided url.")
+		return "", err
 	}
 
-	status, _, _, _, err := clnt.GetObjectLockConfig(ctx)
+	status, _, _, _, err = clnt.GetObjectLockConfig(ctx)
 	if err != nil {
-		fatalIf(err.Trace(), "Unable to get bucket object lock configuration from `%s`", aliasedURL)
+		errResp := minio.ToErrorResponse(err.ToGoError())
+		if errResp.StatusCode == http.StatusNotFound {
+			return "", probe.NewError(errBucketLockConfigNotFound)
+		}
+		return "", err
 	}
 
-	if status != "Enabled" {
-		fatalIf(errDummy().Trace(), "Remote bucket does not support locking `%s`", aliasedURL)
-	}
+	return status, nil
 }
 
 // main for retention command.
 func mainLegalHold(ctx *cli.Context) error {
-	cli.ShowCommandHelp(ctx, ctx.Args().First())
+	commandNotFound(ctx, legalHoldSubcommands)
 	return nil
 }

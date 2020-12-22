@@ -90,11 +90,12 @@ var (
 
 // remove a file or folder.
 var rmCmd = cli.Command{
-	Name:   "rm",
-	Usage:  "remove objects",
-	Action: mainRm,
-	Before: setGlobalsFromContext,
-	Flags:  append(append(rmFlags, ioFlags...), globalFlags...),
+	Name:         "rm",
+	Usage:        "remove objects",
+	Action:       mainRm,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(append(rmFlags, ioFlags...), globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -344,11 +345,11 @@ func listAndRemove(url string, timeRef time.Time, withVersions, isRecursive, isI
 
 	errorCh := clnt.Remove(ctx, isIncomplete, isRemoveBucket, isBypass, contentCh)
 
-	listOpts := ListOptions{isRecursive: isRecursive, isIncomplete: isIncomplete, showDir: DirNone}
+	listOpts := ListOptions{Recursive: isRecursive, Incomplete: isIncomplete, ShowDir: DirLast}
 	if !timeRef.IsZero() {
-		listOpts.withOlderVersions = withVersions
-		listOpts.withDeleteMarkers = true
-		listOpts.timeRef = timeRef
+		listOpts.WithOlderVersions = withVersions
+		listOpts.WithDeleteMarkers = true
+		listOpts.TimeRef = timeRef
 	}
 
 	atLeastOneObjectFound := false

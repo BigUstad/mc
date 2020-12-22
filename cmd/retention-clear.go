@@ -52,11 +52,12 @@ var (
 )
 
 var retentionClearCmd = cli.Command{
-	Name:   "clear",
-	Usage:  "clear retention for object(s)",
-	Action: mainRetentionClear,
-	Before: setGlobalsFromContext,
-	Flags:  append(retentionClearFlags, globalFlags...),
+	Name:         "clear",
+	Usage:        "clear retention for object(s)",
+	Action:       mainRetentionClear,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(retentionClearFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -105,11 +106,11 @@ func parseClearRetentionArgs(cliCtx *cli.Context) (target, versionID string, tim
 
 // Clear Retention for one object/version or many objects within a given prefix, bypass governance is always enabled
 func clearRetention(ctx context.Context, target, versionID string, timeRef time.Time, withOlderVersions, isRecursive bool) error {
-	return applyRetention(ctx, "clear", target, versionID, timeRef, withOlderVersions, isRecursive, "", 0, minio.Days, true)
+	return applyRetention(ctx, lockOpClear, target, versionID, timeRef, withOlderVersions, isRecursive, "", 0, minio.Days, true)
 }
 
 func clearBucketLock(urlStr string) error {
-	return applyBucketLock("clear", urlStr, "", 0, "")
+	return applyBucketLock(lockOpClear, urlStr, "", 0, "")
 }
 
 // main for retention clear command.

@@ -28,12 +28,13 @@ import (
 	"github.com/minio/minio/pkg/console"
 )
 
-var ilmSetCmd = cli.Command{
-	Name:   "set",
-	Usage:  "modify a lifecycle configuration rule with given id",
-	Action: mainILMSet,
-	Before: setGlobalsFromContext,
-	Flags:  append(ilmSetFlags, globalFlags...),
+var ilmEditCmd = cli.Command{
+	Name:         "edit",
+	Usage:        "modify a lifecycle configuration rule with given id",
+	Action:       mainILMEdit,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(ilmEditFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -44,21 +45,19 @@ FLAGS:
   {{range .VisibleFlags}}{{.}}
   {{end}}
 DESCRIPTION:
-  modify a lifecycle configuration rule with given id.
+  Modify a lifecycle configuration rule with given id.
 
 EXAMPLES:
   1. Modify the expiration date for an existing rule with id "rHTY.a123".
-     {{.Prompt}} {{.HelpName}} --id "rHTY.a123" \
-          --expiry-date "2020-09-17" s3/mybucket
+     {{.Prompt}} {{.HelpName}} --id "rHTY.a123" --expiry-date "2020-09-17" s3/mybucket
 
   2. Modify the expiration and transition days for an existing rule with id "hGHKijqpo123".
-     {{.Prompt}} {{.HelpName}} --id "hGHKijqpo123" \
-          --expiry-days "300" --transition-days "200" \
-          --storage-class "GLACIER" s3/mybucket
+     {{.Prompt}} {{.HelpName}} --id "hGHKijqpo123" --expiry-days "300" \
+          --transition-days "200" --storage-class "GLACIER" s3/mybucket
 `,
 }
 
-var ilmSetFlags = []cli.Flag{
+var ilmEditFlags = []cli.Flag{
 	cli.StringFlag{
 		Name:  "id",
 		Usage: "id of the rule to be modified",
@@ -93,26 +92,26 @@ var ilmSetFlags = []cli.Flag{
 	},
 }
 
-type ilmSetMessage struct {
+type ilmEditMessage struct {
 	Status string `json:"status"`
 	Target string `json:"target"`
 	ID     string `json:"id"`
 }
 
-func (i ilmSetMessage) String() string {
-	return console.Colorize(ilmThemeResultSuccess, "Lifecycle configuration rule added with ID `"+i.ID+"` to "+i.Target+".")
+func (i ilmEditMessage) String() string {
+	return console.Colorize(ilmThemeResultSuccess, "Lifecycle configuration rule with ID `"+i.ID+"` modified  to "+i.Target+".")
 }
 
-func (i ilmSetMessage) JSON() string {
+func (i ilmEditMessage) JSON() string {
 	msgBytes, e := json.MarshalIndent(i, "", " ")
 	fatalIf(probe.NewError(e), "Unable to marshal into JSON.")
 	return string(msgBytes)
 }
 
 // Validate user given arguments
-func checkILMSetSyntax(ctx *cli.Context) {
+func checkILMEditSyntax(ctx *cli.Context) {
 	if len(ctx.Args()) != 1 {
-		cli.ShowCommandHelpAndExit(ctx, "set", globalErrorExitStatus)
+		cli.ShowCommandHelpAndExit(ctx, "edit", globalErrorExitStatus)
 	}
 	id := ctx.String("id")
 	if id == "" {
@@ -121,11 +120,11 @@ func checkILMSetSyntax(ctx *cli.Context) {
 }
 
 // Calls SetBucketLifecycle with the XML representation of lifecycleConfiguration type.
-func mainILMSet(cliCtx *cli.Context) error {
-	ctx, cancelILMSet := context.WithCancel(globalContext)
-	defer cancelILMSet()
+func mainILMEdit(cliCtx *cli.Context) error {
+	ctx, cancelILMEdit := context.WithCancel(globalContext)
+	defer cancelILMEdit()
 
-	checkILMSetSyntax(cliCtx)
+	checkILMEditSyntax(cliCtx)
 	setILMDisplayColorScheme()
 	args := cliCtx.Args()
 	urlStr := args.Get(0)
@@ -151,7 +150,7 @@ func mainILMSet(cliCtx *cli.Context) error {
 
 	fatalIf(client.SetLifecycle(ctx, lfcCfg).Trace(urlStr), "Unable to set new lifecycle rules")
 
-	printMsg(ilmSetMessage{
+	printMsg(ilmEditMessage{
 		Status: "success",
 		Target: urlStr,
 		ID:     opts.ID,

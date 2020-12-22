@@ -52,11 +52,12 @@ var (
 	}
 )
 var legalHoldInfoCmd = cli.Command{
-	Name:   "info",
-	Usage:  "show legal hold info for object(s)",
-	Action: mainLegalHoldInfo,
-	Before: setGlobalsFromContext,
-	Flags:  append(lhInfoFlags, globalFlags...),
+	Name:         "info",
+	Usage:        "show legal hold info for object(s)",
+	Action:       mainLegalHoldInfo,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(lhInfoFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -164,10 +165,10 @@ func showLegalHoldInfo(ctx context.Context, urlStr, versionID string, timeRef ti
 	var cErr error
 	errorsFound := false
 	objectsFound := false
-	lstOptions := ListOptions{isRecursive: recursive, showDir: DirNone}
+	lstOptions := ListOptions{Recursive: recursive, ShowDir: DirNone}
 	if !timeRef.IsZero() {
-		lstOptions.withOlderVersions = withOlderVersions
-		lstOptions.timeRef = timeRef
+		lstOptions.WithOlderVersions = withOlderVersions
+		lstOptions.TimeRef = timeRef
 	}
 	for content := range clnt.List(ctx, lstOptions) {
 		if content.Err != nil {
@@ -236,7 +237,13 @@ func mainLegalHoldInfo(cliCtx *cli.Context) error {
 	ctx, cancelLegalHold := context.WithCancel(globalContext)
 	defer cancelLegalHold()
 
-	checkBucketLockSupport(ctx, targetURL)
+	enabled, err := isBucketLockEnabled(ctx, targetURL)
+	if err != nil {
+		fatalIf(err, "Unable to get legalhold info of `%s`", targetURL)
+	}
+	if !enabled {
+		fatalIf(errDummy().Trace(), "Bucket lock needs to be enabled in order to use this feature.")
+	}
 
 	return showLegalHoldInfo(ctx, targetURL, versionID, timeRef, withVersions, recursive)
 }

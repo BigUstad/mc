@@ -48,11 +48,12 @@ var (
 )
 
 var legalHoldClearCmd = cli.Command{
-	Name:   "clear",
-	Usage:  "clear legal hold for object(s)",
-	Action: mainLegalHoldClear,
-	Before: setGlobalsFromContext,
-	Flags:  append(lhClearFlags, globalFlags...),
+	Name:         "clear",
+	Usage:        "clear legal hold for object(s)",
+	Action:       mainLegalHoldClear,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(lhClearFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -92,7 +93,13 @@ func mainLegalHoldClear(cliCtx *cli.Context) error {
 	ctx, cancelCopy := context.WithCancel(globalContext)
 	defer cancelCopy()
 
-	checkBucketLockSupport(ctx, targetURL)
+	enabled, err := isBucketLockEnabled(ctx, targetURL)
+	if err != nil {
+		fatalIf(err, "Unable to clear legalhold of `%s`", targetURL)
+	}
+	if !enabled {
+		fatalIf(errDummy().Trace(), "Bucket locking needs to be enabled in order to use this feature.")
+	}
 
 	return setLegalHold(ctx, targetURL, versionID, timeRef, withVersions, recursive, minio.LegalHoldDisabled)
 }

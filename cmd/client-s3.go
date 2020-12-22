@@ -137,50 +137,55 @@ func newFactory() func(config *Config) (Client, *probe.Error) {
 				creds = credentials.NewStaticV2(config.AccessKey, config.SecretKey, "")
 			}
 
-			tr := &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				DialContext: (&net.Dialer{
-					Timeout:   10 * time.Second,
-					KeepAlive: 15 * time.Second,
-				}).DialContext,
-				MaxIdleConnsPerHost:   256,
-				IdleConnTimeout:       90 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ExpectContinueTimeout: 10 * time.Second,
-				// Set this value so that the underlying transport round-tripper
-				// doesn't try to auto decode the body of objects with
-				// content-encoding set to `gzip`.
-				//
-				// Refer:
-				//    https://golang.org/src/net/http/transport.go?h=roundTrip#L1843
-				DisableCompression: true,
+			var transport http.RoundTripper
+
+			if config.Transport != nil {
+				transport = config.Transport
+			} else {
+				tr := &http.Transport{
+					Proxy: http.ProxyFromEnvironment,
+					DialContext: (&net.Dialer{
+						Timeout:   10 * time.Second,
+						KeepAlive: 15 * time.Second,
+					}).DialContext,
+					MaxIdleConnsPerHost:   256,
+					IdleConnTimeout:       90 * time.Second,
+					TLSHandshakeTimeout:   10 * time.Second,
+					ExpectContinueTimeout: 10 * time.Second,
+					// Set this value so that the underlying transport round-tripper
+					// doesn't try to auto decode the body of objects with
+					// content-encoding set to `gzip`.
+					//
+					// Refer:
+					//    https://golang.org/src/net/http/transport.go?h=roundTrip#L1843
+					DisableCompression: true,
+				}
+				if useTLS {
+					// Keep TLS config.
+					tlsConfig := &tls.Config{
+						RootCAs: globalRootCAs,
+						// Can't use SSLv3 because of POODLE and BEAST
+						// Can't use TLSv1.0 because of POODLE and BEAST using CBC cipher
+						// Can't use TLSv1.1 because of RC4 cipher usage
+						MinVersion: tls.VersionTLS12,
+					}
+					if config.Insecure {
+						tlsConfig.InsecureSkipVerify = true
+					}
+					tr.TLSClientConfig = tlsConfig
+
+					// Because we create a custom TLSClientConfig, we have to opt-in to HTTP/2.
+					// See https://github.com/golang/go/issues/14275
+					//
+					// TODO: Enable http2.0 when upstream issues related to HTTP/2 are fixed.
+					//
+					// if e = http2.ConfigureTransport(tr); e != nil {
+					// 	return nil, probe.NewError(e)
+					// }
+				}
+				transport = tr
 			}
 
-			if useTLS {
-				// Keep TLS config.
-				tlsConfig := &tls.Config{
-					RootCAs: globalRootCAs,
-					// Can't use SSLv3 because of POODLE and BEAST
-					// Can't use TLSv1.0 because of POODLE and BEAST using CBC cipher
-					// Can't use TLSv1.1 because of RC4 cipher usage
-					MinVersion: tls.VersionTLS12,
-				}
-				if config.Insecure {
-					tlsConfig.InsecureSkipVerify = true
-				}
-				tr.TLSClientConfig = tlsConfig
-
-				// Because we create a custom TLSClientConfig, we have to opt-in to HTTP/2.
-				// See https://github.com/golang/go/issues/14275
-				//
-				// TODO: Enable http2.0 when upstream issues related to HTTP/2 are fixed.
-				//
-				// if e = http2.ConfigureTransport(tr); e != nil {
-				// 	return nil, probe.NewError(e)
-				// }
-			}
-
-			var transport http.RoundTripper = tr
 			if config.Debug {
 				if strings.EqualFold(config.Signature, "S3v4") {
 					transport = httptracer.GetNewTraceTransport(newTraceV4(), transport)
@@ -260,6 +265,11 @@ func (c *S3Client) AddNotificationConfig(ctx context.Context, arn string, events
 			nc.AddEvents(notification.ObjectRemovedAll)
 		case "get":
 			nc.AddEvents(notification.ObjectAccessedAll)
+		case "replica":
+			nc.AddEvents(notification.EventType("s3:Replication:*"))
+		case "ilm":
+			nc.AddEvents(notification.EventType("s3:ObjectRestore:*"))
+			nc.AddEvents(notification.EventType("s3:ObjectTransition:*"))
 		default:
 			return errInvalidArgument().Trace(events...)
 		}
@@ -652,7 +662,7 @@ func (c *S3Client) notificationToEventsInfo(ninfo notification.Info) []EventInfo
 					Size:         record.S3.Object.Size,
 					UserMetadata: record.S3.Object.UserMetadata,
 					Path:         u.String(),
-					Type:         EventCreateCopy,
+					Type:         notification.ObjectCreatedCopy,
 					Host:         record.Source.Host,
 					Port:         record.Source.Port,
 					UserAgent:    record.Source.UserAgent,
@@ -663,7 +673,7 @@ func (c *S3Client) notificationToEventsInfo(ninfo notification.Info) []EventInfo
 					Size:         record.S3.Object.Size,
 					UserMetadata: record.S3.Object.UserMetadata,
 					Path:         u.String(),
-					Type:         EventCreatePutRetention,
+					Type:         notification.EventType("s3:ObjectCreated:PutRetention"),
 					Host:         record.Source.Host,
 					Port:         record.Source.Port,
 					UserAgent:    record.Source.UserAgent,
@@ -674,7 +684,7 @@ func (c *S3Client) notificationToEventsInfo(ninfo notification.Info) []EventInfo
 					Size:         record.S3.Object.Size,
 					UserMetadata: record.S3.Object.UserMetadata,
 					Path:         u.String(),
-					Type:         EventCreatePutLegalHold,
+					Type:         notification.EventType("s3:ObjectCreated:PutLegalHold"),
 					Host:         record.Source.Host,
 					Port:         record.Source.Port,
 					UserAgent:    record.Source.UserAgent,
@@ -685,41 +695,19 @@ func (c *S3Client) notificationToEventsInfo(ninfo notification.Info) []EventInfo
 					Size:         record.S3.Object.Size,
 					UserMetadata: record.S3.Object.UserMetadata,
 					Path:         u.String(),
-					Type:         EventCreate,
+					Type:         notification.ObjectCreatedPut,
 					Host:         record.Source.Host,
 					Port:         record.Source.Port,
 					UserAgent:    record.Source.UserAgent,
 				}
 			}
-		} else if strings.HasPrefix(record.EventName, "s3:ObjectRemoved:") {
+		} else {
 			eventsInfo[i] = EventInfo{
 				Time:         record.EventTime,
 				Size:         record.S3.Object.Size,
 				UserMetadata: record.S3.Object.UserMetadata,
 				Path:         u.String(),
-				Type:         EventRemove,
-				Host:         record.Source.Host,
-				Port:         record.Source.Port,
-				UserAgent:    record.Source.UserAgent,
-			}
-		} else if record.EventName == notification.ObjectAccessedGet {
-			eventsInfo[i] = EventInfo{
-				Time:         record.EventTime,
-				Size:         record.S3.Object.Size,
-				UserMetadata: record.S3.Object.UserMetadata,
-				Path:         u.String(),
-				Type:         EventAccessedRead,
-				Host:         record.Source.Host,
-				Port:         record.Source.Port,
-				UserAgent:    record.Source.UserAgent,
-			}
-		} else if record.EventName == notification.ObjectAccessedHead {
-			eventsInfo[i] = EventInfo{
-				Time:         record.EventTime,
-				Size:         record.S3.Object.Size,
-				UserMetadata: record.S3.Object.UserMetadata,
-				Path:         u.String(),
-				Type:         EventAccessedStat,
+				Type:         notification.EventType(record.EventName),
 				Host:         record.Source.Host,
 				Port:         record.Source.Port,
 				UserAgent:    record.Source.UserAgent,
@@ -734,6 +722,14 @@ func (c *S3Client) Watch(ctx context.Context, options WatchOptions) (*WatchObjec
 	// Extract bucket and object.
 	bucket, object := c.url2BucketAndObject()
 
+	// Validation
+	if bucket == "" && object != "" {
+		return nil, errInvalidArgument().Trace(bucket, object)
+	}
+	if object != "" && options.Prefix != "" {
+		return nil, errInvalidArgument().Trace(options.Prefix, object)
+	}
+
 	// Flag set to set the notification.
 	var events []string
 	for _, event := range options.Events {
@@ -744,29 +740,17 @@ func (c *S3Client) Watch(ctx context.Context, options WatchOptions) (*WatchObjec
 			events = append(events, string(notification.ObjectRemovedAll))
 		case "get":
 			events = append(events, string(notification.ObjectAccessedAll))
+		case "replica":
+			events = append(events, "s3:Replication:*") // TODO: add it to minio-go as constant
+		case "ilm":
+			events = append(events, "s3:ObjectRestore:*", "s3:ObjectTransition:*") // TODO: add it to minio-go as constant
+		case "bucket-creation":
+			events = append(events, string(notification.BucketCreatedAll))
+		case "bucket-removal":
+			events = append(events, string(notification.BucketRemovedAll))
 		default:
 			return nil, errInvalidArgument().Trace(event)
 		}
-	}
-	if object != "" && options.Prefix != "" {
-		return nil, errInvalidArgument().Trace(options.Prefix, object)
-	}
-	if object != "" && options.Prefix == "" {
-		options.Prefix = object
-	}
-
-	// The list of buckets to watch
-	var buckets []string
-	if bucket == "" {
-		bkts, err := c.api.ListBuckets(ctx)
-		if err != nil {
-			return nil, probe.NewError(err)
-		}
-		for _, b := range bkts {
-			buckets = append(buckets, b.Name)
-		}
-	} else {
-		buckets = append(buckets, bucket)
 	}
 
 	wo := &WatchObject{
@@ -775,36 +759,35 @@ func (c *S3Client) Watch(ctx context.Context, options WatchOptions) (*WatchObjec
 		DoneChan:      make(chan struct{}),
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(len(buckets))
-	for _, bucket := range buckets {
-		bucket := bucket
-		go func() {
-			defer wg.Done()
-			// Start listening on all bucket events.
-			eventsCh := c.api.ListenBucketNotification(ctx, bucket, options.Prefix, options.Suffix, events)
-			for notificationInfo := range eventsCh {
-				if notificationInfo.Err != nil {
-					var perr *probe.Error
-					if minio.ToErrorResponse(notificationInfo.Err).Code == "NotImplemented" {
-						perr = probe.NewError(APINotImplemented{
-							API:     "Watch",
-							APIType: c.GetURL().String(),
-						})
-					} else {
-						perr = probe.NewError(notificationInfo.Err)
-					}
-					wo.Errors() <- perr
-				} else {
-					wo.Events() <- c.notificationToEventsInfo(notificationInfo)
-				}
-			}
-		}()
+	var eventsCh <-chan notification.Info
+	if bucket != "" {
+		if object != "" && options.Prefix == "" {
+			options.Prefix = object
+		}
+		eventsCh = c.api.ListenBucketNotification(ctx, bucket, options.Prefix, options.Suffix, events)
+	} else {
+		eventsCh = c.api.ListenNotification(ctx, "", "", events)
 	}
 
 	go func() {
-		wg.Wait() // this occurs when all watchers have returned
-		// we can safely close data and error channels
+		// Start listening on all bucket events.
+		for notificationInfo := range eventsCh {
+			if notificationInfo.Err != nil {
+				var perr *probe.Error
+				if minio.ToErrorResponse(notificationInfo.Err).Code == "NotImplemented" {
+					perr = probe.NewError(APINotImplemented{
+						API:     "Watch",
+						APIType: c.GetURL().String(),
+					})
+				} else {
+					perr = probe.NewError(notificationInfo.Err)
+				}
+				wo.Errors() <- perr
+			} else {
+				wo.Events() <- c.notificationToEventsInfo(notificationInfo)
+			}
+		}
+
 		close(wo.EventInfoChan)
 		close(wo.ErrorChan)
 	}()
@@ -815,10 +798,11 @@ func (c *S3Client) Watch(ctx context.Context, options WatchOptions) (*WatchObjec
 // Get - get object with GET options.
 func (c *S3Client) Get(ctx context.Context, opts GetOptions) (io.ReadCloser, *probe.Error) {
 	bucket, object := c.url2BucketAndObject()
+
 	reader, e := c.api.GetObject(ctx, bucket, object,
 		minio.GetObjectOptions{
-			ServerSideEncryption: opts.sse,
-			VersionID:            opts.versionID,
+			ServerSideEncryption: opts.SSE,
+			VersionID:            opts.VersionID,
 		})
 	if e != nil {
 		errResponse := minio.ToErrorResponse(e)
@@ -1196,15 +1180,16 @@ func (c *S3Client) MakeBucket(ctx context.Context, region string, ignoreExisting
 	}
 	if object != "" {
 		if !strings.HasSuffix(object, string(c.targetURL.Separator)) {
-			object = path.Dir(object)
-		}
-		if !strings.HasSuffix(object, string(c.targetURL.Separator)) {
-			return probe.NewError(BucketNameTopLevel{})
+			object += string(c.targetURL.Separator)
 		}
 		var retried bool
 		for {
-			_, e := c.api.PutObject(ctx, bucket, object,
-				bytes.NewReader([]byte("")), 0, minio.PutObjectOptions{})
+			_, e := c.api.PutObject(ctx, bucket, object, bytes.NewReader([]byte("")), 0,
+				// Always send Content-MD5 to succeed with bucket with
+				// locking enabled. There is no performance hit since
+				// this is always an empty object
+				minio.PutObjectOptions{SendContentMd5: true},
+			)
 			if e == nil {
 				return nil
 			}
@@ -1383,7 +1368,12 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 
 	// Bucket name cannot be empty, stat on URL has no meaning.
 	if bucket == "" {
-		return nil, probe.NewError(BucketNameEmpty{})
+		url := c.targetURL.Clone()
+		url.Path = string(c.targetURL.Separator)
+		return &ClientContent{URL: url,
+			Size: 0,
+			Type: os.ModeDir,
+		}, nil
 	}
 
 	if object == "" {
@@ -1433,7 +1423,10 @@ func (c *S3Client) Stat(ctx context.Context, opts StatOptions) (*ClientContent, 
 			return nil, probe.NewError(objectStat.Err)
 		}
 
-		return c.objectInfo2ClientContent(bucket, objectStat), nil
+		if object == objectStat.Key || object == strings.TrimSuffix(objectStat.Key, string(c.targetURL.Separator)) {
+			return c.objectInfo2ClientContent(bucket, objectStat), nil
+		}
+		break
 	}
 
 	return nil, probe.NewError(ObjectMissing{opts.timeRef})
@@ -1465,6 +1458,10 @@ func (c *S3Client) getObjectStat(ctx context.Context, bucket, object string, opt
 			return nil, probe.NewError(ObjectMissing{})
 		}
 		return nil, probe.NewError(e)
+	}
+	// HEAD with a version ID will not return version in the response headers
+	if objectMetadata.VersionID == "" {
+		objectMetadata.VersionID = opts.VersionID
 	}
 	return objectMetadata, nil
 }
@@ -1625,89 +1622,97 @@ func (c *S3Client) List(ctx context.Context, opts ListOptions) <-chan *ClientCon
 	defer c.Unlock()
 
 	contentCh := make(chan *ClientContent)
-
-	if !opts.timeRef.IsZero() || opts.withOlderVersions {
-		b, o := c.url2BucketAndObject()
-		go func() {
-			switch {
-			case b == "" && o == "":
-				buckets, err := c.api.ListBuckets(ctx)
-				if err != nil {
-					contentCh <- &ClientContent{
-						Err: probe.NewError(err),
-					}
-					close(contentCh)
-					return
-				}
-				for _, bucket := range buckets {
-					for objectVersion := range c.listVersions(ctx, bucket.Name, "",
-						opts.isRecursive, opts.timeRef, opts.withOlderVersions, opts.withDeleteMarkers) {
-						if objectVersion.Err != nil {
-							if minio.ToErrorResponse(objectVersion.Err).Code == "NotImplemented" {
-								goto noVersioning
-							} else {
-								contentCh <- &ClientContent{
-									Err: probe.NewError(objectVersion.Err),
-								}
-								continue
-							}
-						}
-						contentCh <- c.objectInfo2ClientContent(bucket.Name, objectVersion)
-					}
-				}
-				close(contentCh)
-				return
-			default:
-				for objectVersion := range c.listVersions(ctx, b, o,
-					opts.isRecursive, opts.timeRef, opts.withOlderVersions, opts.withDeleteMarkers) {
-					if objectVersion.Err != nil {
-						if minio.ToErrorResponse(objectVersion.Err).Code == "NotImplemented" {
-							goto noVersioning
-						} else {
-							contentCh <- &ClientContent{
-								Err: probe.NewError(objectVersion.Err),
-							}
-							continue
-						}
-					}
-					contentCh <- c.objectInfo2ClientContent(b, objectVersion)
-				}
-				close(contentCh)
-				return
-			}
-		noVersioning:
-			c.listRecursiveInRoutine(ctx, contentCh, false)
-		}()
-		return contentCh
-	}
-
-	if opts.isIncomplete {
-		if opts.isRecursive {
-			if opts.showDir == DirNone {
-				go c.listIncompleteRecursiveInRoutine(ctx, contentCh)
-			} else {
-				go c.listIncompleteRecursiveInRoutineDirOpt(ctx, contentCh, opts.showDir)
-			}
+	go func() {
+		defer close(contentCh)
+		if !opts.TimeRef.IsZero() || opts.WithOlderVersions {
+			c.versionedList(ctx, contentCh, opts)
 		} else {
-			go c.listIncompleteInRoutine(ctx, contentCh)
+			c.unversionedList(ctx, contentCh, opts)
 		}
-	} else {
-		if opts.isRecursive {
-			if opts.showDir == DirNone {
-				go c.listRecursiveInRoutine(ctx, contentCh, opts.isFetchMeta)
-			} else {
-				go c.listRecursiveInRoutineDirOpt(ctx, contentCh, opts.showDir, opts.isFetchMeta)
-			}
-		} else {
-			go c.listInRoutine(ctx, contentCh, opts.isFetchMeta)
-		}
-	}
+	}()
 
 	return contentCh
 }
 
-func (c *S3Client) listIncompleteInRoutine(ctx context.Context, contentCh chan *ClientContent) {
-	defer close(contentCh)
+// versionedList returns objects versions if the S3 backend supports versioning,
+// it falls back to the regular listing if not.
+func (c *S3Client) versionedList(ctx context.Context, contentCh chan *ClientContent, opts ListOptions) {
+	b, o := c.url2BucketAndObject()
+	switch {
+	case b == "" && o == "":
+		buckets, err := c.api.ListBuckets(ctx)
+		if err != nil {
+			contentCh <- &ClientContent{
+				Err: probe.NewError(err),
+			}
+			return
+		}
+
+		for _, bucket := range buckets {
+			if opts.ShowDir != DirLast {
+				contentCh <- c.bucketInfo2ClientContent(bucket)
+			}
+			for objectVersion := range c.listVersions(ctx, bucket.Name, "",
+				opts.Recursive, opts.TimeRef, opts.WithOlderVersions, opts.WithDeleteMarkers) {
+				if objectVersion.Err != nil {
+					if minio.ToErrorResponse(objectVersion.Err).Code == "NotImplemented" {
+						goto noVersioning
+					} else {
+						contentCh <- &ClientContent{
+							Err: probe.NewError(objectVersion.Err),
+						}
+						continue
+					}
+				}
+				contentCh <- c.objectInfo2ClientContent(bucket.Name, objectVersion)
+			}
+
+			if opts.ShowDir == DirLast {
+				contentCh <- c.bucketInfo2ClientContent(bucket)
+			}
+		}
+		return
+	default:
+		for objectVersion := range c.listVersions(ctx, b, o,
+			opts.Recursive, opts.TimeRef, opts.WithOlderVersions, opts.WithDeleteMarkers) {
+			if objectVersion.Err != nil {
+				if minio.ToErrorResponse(objectVersion.Err).Code == "NotImplemented" {
+					goto noVersioning
+				} else {
+					contentCh <- &ClientContent{
+						Err: probe.NewError(objectVersion.Err),
+					}
+					continue
+				}
+			}
+			contentCh <- c.objectInfo2ClientContent(b, objectVersion)
+		}
+		return
+	}
+
+noVersioning:
+	c.unversionedList(ctx, contentCh, opts)
+
+}
+
+// unversionedList is the non versioned S3 listing
+func (c *S3Client) unversionedList(ctx context.Context, contentCh chan *ClientContent, opts ListOptions) {
+	if opts.Incomplete {
+		if opts.Recursive {
+			c.listIncompleteRecursiveInRoutine(ctx, contentCh, opts)
+		} else {
+			c.listIncompleteInRoutine(ctx, contentCh, opts)
+		}
+	} else {
+		if opts.Recursive {
+			c.listRecursiveInRoutine(ctx, contentCh, opts)
+		} else {
+			c.listInRoutine(ctx, contentCh, opts)
+		}
+	}
+}
+
+func (c *S3Client) listIncompleteInRoutine(ctx context.Context, contentCh chan *ClientContent, opts ListOptions) {
 	// get bucket and object from URL.
 	b, o := c.url2BucketAndObject()
 	switch {
@@ -1777,8 +1782,7 @@ func (c *S3Client) listIncompleteInRoutine(ctx context.Context, contentCh chan *
 	}
 }
 
-func (c *S3Client) listIncompleteRecursiveInRoutine(ctx context.Context, contentCh chan *ClientContent) {
-	defer close(contentCh)
+func (c *S3Client) listIncompleteRecursiveInRoutine(ctx context.Context, contentCh chan *ClientContent, opts ListOptions) {
 	// get bucket and object from URL.
 	b, o := c.url2BucketAndObject()
 	switch {
@@ -1792,6 +1796,10 @@ func (c *S3Client) listIncompleteRecursiveInRoutine(ctx context.Context, content
 		}
 		isRecursive := true
 		for _, bucket := range buckets {
+			if opts.ShowDir != DirLast {
+				contentCh <- c.bucketInfo2ClientContent(bucket)
+			}
+
 			for object := range c.api.ListIncompleteUploads(ctx, bucket.Name, o, isRecursive) {
 				if object.Err != nil {
 					contentCh <- &ClientContent{
@@ -1807,6 +1815,10 @@ func (c *S3Client) listIncompleteRecursiveInRoutine(ctx context.Context, content
 				content.Time = object.Initiated
 				content.Type = os.ModeTemporary
 				contentCh <- content
+			}
+
+			if opts.ShowDir == DirLast {
+				contentCh <- c.bucketInfo2ClientContent(bucket)
 			}
 		}
 	default:
@@ -1849,103 +1861,6 @@ func (c *S3Client) objectMultipartInfo2ClientContent(bucket string, entry minio.
 	}
 
 	return content
-}
-
-// Recursively lists incomplete uploads.
-func (c *S3Client) listIncompleteRecursiveInRoutineDirOpt(ctx context.Context, contentCh chan *ClientContent, dirOpt DirOpt) {
-	defer close(contentCh)
-
-	// Closure function reads list of incomplete uploads and sends to contentCh. If a directory is found, it lists
-	// incomplete uploads of the directory content recursively.
-	var listDir func(bucket, object string) bool
-	listDir = func(bucket, object string) (isStop bool) {
-		isRecursive := false
-		for entry := range c.api.ListIncompleteUploads(ctx, bucket, object, isRecursive) {
-			if entry.Err != nil {
-				url := c.targetURL.Clone()
-				url.Path = c.joinPath(bucket, object)
-				contentCh <- &ClientContent{URL: url, Err: probe.NewError(entry.Err)}
-
-				errResponse := minio.ToErrorResponse(entry.Err)
-				if errResponse.Code == "AccessDenied" {
-					continue
-				}
-
-				return true
-			}
-
-			content := c.objectMultipartInfo2ClientContent(bucket, entry)
-
-			// Handle if object.Key is a directory.
-			if strings.HasSuffix(entry.Key, string(c.targetURL.Separator)) {
-				if dirOpt == DirFirst {
-					contentCh <- &content
-				}
-				if listDir(bucket, entry.Key) {
-					return true
-				}
-				if dirOpt == DirLast {
-					contentCh <- &content
-				}
-			} else {
-				contentCh <- &content
-			}
-		}
-
-		return false
-	}
-
-	bucket, object := c.url2BucketAndObject()
-	var cContent *ClientContent
-	var buckets []minio.BucketInfo
-	var allBuckets bool
-	// List all buckets if bucket and object are empty.
-	if bucket == "" && object == "" {
-		var e error
-		allBuckets = true
-		buckets, e = c.api.ListBuckets(ctx)
-		if e != nil {
-			contentCh <- &ClientContent{Err: probe.NewError(e)}
-			return
-		}
-	} else if object == "" {
-		// Get bucket stat if object is empty.
-		content, err := c.bucketStat(ctx, bucket)
-		if err != nil {
-			contentCh <- &ClientContent{Err: err.Trace(bucket)}
-			return
-		}
-		buckets = append(buckets, minio.BucketInfo{Name: bucket, CreationDate: content.Time})
-	} else if strings.HasSuffix(object, string(c.targetURL.Separator)) {
-		// Get stat of given object is a directory.
-		content, perr := c.Stat(ctx, StatOptions{incomplete: true})
-		cContent = content
-		if perr != nil {
-			contentCh <- &ClientContent{Err: perr.Trace(bucket)}
-			return
-		}
-		buckets = append(buckets, minio.BucketInfo{Name: bucket, CreationDate: content.Time})
-	}
-	for _, bucket := range buckets {
-		if allBuckets {
-			url := c.targetURL.Clone()
-			url.Path = c.joinPath(bucket.Name)
-			cContent = &ClientContent{
-				URL:  url,
-				Time: bucket.CreationDate,
-				Type: os.ModeDir,
-			}
-		}
-		if cContent != nil && dirOpt == DirFirst {
-			contentCh <- cContent
-		}
-		//Recursively push all object prefixes into contentCh to mimic directory listing
-		listDir(bucket.Name, object)
-
-		if cContent != nil && dirOpt == DirLast {
-			contentCh <- cContent
-		}
-	}
 }
 
 // Returns new path by joining path segments with URL path separator.
@@ -2037,98 +1952,7 @@ func (c *S3Client) bucketStat(ctx context.Context, bucket string) (*ClientConten
 	return &ClientContent{URL: c.targetURL.Clone(), Time: time.Unix(0, 0), Type: os.ModeDir}, nil
 }
 
-// Recursively lists objects.
-func (c *S3Client) listRecursiveInRoutineDirOpt(ctx context.Context, contentCh chan *ClientContent, dirOpt DirOpt, metadata bool) {
-	defer close(contentCh)
-	// Closure function reads list objects and sends to contentCh. If a directory is found, it lists
-	// objects of the directory content recursively.
-	var listDir func(bucket, object string) bool
-	listDir = func(bucket, object string) (isStop bool) {
-		isRecursive := false
-		for entry := range c.listObjectWrapper(ctx, bucket, object, isRecursive, time.Time{}, false, false, metadata) {
-			if entry.Err != nil {
-				url := c.targetURL.Clone()
-				url.Path = c.joinPath(bucket, object)
-				contentCh <- &ClientContent{URL: url, Err: probe.NewError(entry.Err)}
-
-				errResponse := minio.ToErrorResponse(entry.Err)
-				if errResponse.Code == "AccessDenied" {
-					continue
-				}
-				return true
-			}
-
-			content := c.objectInfo2ClientContent(bucket, entry)
-
-			// Handle if object.Key is a directory.
-			if content.Type.IsDir() {
-				if dirOpt == DirFirst {
-					contentCh <- content
-				}
-				if listDir(bucket, entry.Key) {
-					return true
-				}
-				if dirOpt == DirLast {
-					contentCh <- content
-				}
-			} else {
-				contentCh <- content
-			}
-		}
-		return false
-	}
-
-	bucket, object := c.url2BucketAndObject()
-
-	var cContent *ClientContent
-	var buckets []minio.BucketInfo
-	var allBuckets bool
-	// List all buckets if bucket and object are empty.
-	if bucket == "" && object == "" {
-		var e error
-		allBuckets = true
-		buckets, e = c.api.ListBuckets(ctx)
-		if e != nil {
-			contentCh <- &ClientContent{Err: probe.NewError(e)}
-			return
-		}
-	} else if object == "" {
-		// Get bucket stat if object is empty.
-		content, err := c.bucketStat(ctx, bucket)
-		if err != nil {
-			contentCh <- &ClientContent{Err: err.Trace(bucket)}
-			return
-		}
-		buckets = append(buckets, minio.BucketInfo{Name: bucket, CreationDate: content.Time})
-	} else {
-		// Get stat of given object is a directory.
-		content, perr := c.Stat(ctx, StatOptions{})
-		cContent = content
-		if perr != nil {
-			contentCh <- &ClientContent{Err: perr.Trace(bucket)}
-			return
-		}
-		buckets = append(buckets, minio.BucketInfo{Name: bucket, CreationDate: content.Time})
-	}
-
-	for _, bucket := range buckets {
-		if allBuckets {
-			cContent = c.bucketInfo2ClientContent(bucket)
-		}
-		if cContent != nil && dirOpt == DirFirst {
-			contentCh <- cContent
-		}
-		// Recurse thru prefixes to mimic directory listing and push into contentCh
-		listDir(bucket.Name, object)
-
-		if cContent != nil && dirOpt == DirLast {
-			contentCh <- cContent
-		}
-	}
-}
-
-func (c *S3Client) listInRoutine(ctx context.Context, contentCh chan *ClientContent, metadata bool) {
-	defer close(contentCh)
+func (c *S3Client) listInRoutine(ctx context.Context, contentCh chan *ClientContent, opts ListOptions) {
 	// get bucket and object from URL.
 	b, o := c.url2BucketAndObject()
 	switch {
@@ -2152,7 +1976,7 @@ func (c *S3Client) listInRoutine(ctx context.Context, contentCh chan *ClientCont
 		contentCh <- content
 	default:
 		isRecursive := false
-		for object := range c.listObjectWrapper(ctx, b, o, isRecursive, time.Time{}, false, false, metadata) {
+		for object := range c.listObjectWrapper(ctx, b, o, isRecursive, time.Time{}, false, false, opts.WithMetadata) {
 			if object.Err != nil {
 				contentCh <- &ClientContent{
 					Err: probe.NewError(object.Err),
@@ -2183,8 +2007,7 @@ const (
 	s3StorageClassGlacier = "GLACIER"
 )
 
-func (c *S3Client) listRecursiveInRoutine(ctx context.Context, contentCh chan *ClientContent, metadata bool) {
-	defer close(contentCh)
+func (c *S3Client) listRecursiveInRoutine(ctx context.Context, contentCh chan *ClientContent, opts ListOptions) {
 	// get bucket and object from URL.
 	b, o := c.url2BucketAndObject()
 	switch {
@@ -2197,8 +2020,12 @@ func (c *S3Client) listRecursiveInRoutine(ctx context.Context, contentCh chan *C
 			return
 		}
 		for _, bucket := range buckets {
+			if opts.ShowDir == DirFirst {
+				contentCh <- c.bucketInfo2ClientContent(bucket)
+			}
+
 			isRecursive := true
-			for object := range c.listObjectWrapper(ctx, bucket.Name, o, isRecursive, time.Time{}, false, false, metadata) {
+			for object := range c.listObjectWrapper(ctx, bucket.Name, o, isRecursive, time.Time{}, false, false, opts.WithMetadata) {
 				if object.Err != nil {
 					contentCh <- &ClientContent{
 						Err: probe.NewError(object.Err),
@@ -2207,10 +2034,14 @@ func (c *S3Client) listRecursiveInRoutine(ctx context.Context, contentCh chan *C
 				}
 				contentCh <- c.objectInfo2ClientContent(bucket.Name, object)
 			}
+
+			if opts.ShowDir == DirLast {
+				contentCh <- c.bucketInfo2ClientContent(bucket)
+			}
 		}
 	default:
 		isRecursive := true
-		for object := range c.listObjectWrapper(ctx, b, o, isRecursive, time.Time{}, false, false, metadata) {
+		for object := range c.listObjectWrapper(ctx, b, o, isRecursive, time.Time{}, false, false, opts.WithMetadata) {
 			if object.Err != nil {
 				contentCh <- &ClientContent{
 					Err: probe.NewError(object.Err),

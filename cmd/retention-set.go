@@ -58,11 +58,12 @@ var (
 )
 
 var retentionSetCmd = cli.Command{
-	Name:   "set",
-	Usage:  "set retention for object(s)",
-	Action: mainRetentionSet,
-	Before: setGlobalsFromContext,
-	Flags:  append(retentionSetFlags, globalFlags...),
+	Name:         "set",
+	Usage:        "set retention for object(s)",
+	Action:       mainRetentionSet,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(retentionSetFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -90,7 +91,6 @@ EXAMPLES:
 
   5. Set default lock retention configuration for a bucket
      $ {{.HelpName}} --default governance 30d myminio/mybucket/
-
 `}
 
 func parseSetRetentionArgs(cliCtx *cli.Context) (target, versionID string, recursive bool, timeRef time.Time, withVersions bool, mode minio.RetentionMode, validity uint64, unit minio.ValidityUnit, bypass, bucketMode bool) {
@@ -120,11 +120,11 @@ func parseSetRetentionArgs(cliCtx *cli.Context) (target, versionID string, recur
 // Set Retention for one object/version or many objects within a given prefix.
 func setRetention(ctx context.Context, target, versionID string, timeRef time.Time, withOlderVersions, isRecursive bool,
 	mode minio.RetentionMode, validity uint64, unit minio.ValidityUnit, bypassGovernance bool) error {
-	return applyRetention(ctx, "set", target, versionID, timeRef, withOlderVersions, isRecursive, mode, validity, unit, bypassGovernance)
+	return applyRetention(ctx, lockOpSet, target, versionID, timeRef, withOlderVersions, isRecursive, mode, validity, unit, bypassGovernance)
 }
 
 func setBucketLock(urlStr string, mode minio.RetentionMode, validity uint64, unit minio.ValidityUnit) error {
-	return applyBucketLock("set", urlStr, mode, validity, unit)
+	return applyBucketLock(lockOpSet, urlStr, mode, validity, unit)
 }
 
 // main for retention set command.

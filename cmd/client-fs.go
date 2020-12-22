@@ -41,6 +41,7 @@ import (
 	minio "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/encrypt"
 	"github.com/minio/minio-go/v7/pkg/lifecycle"
+	"github.com/minio/minio-go/v7/pkg/notification"
 	"github.com/minio/minio-go/v7/pkg/replication"
 	"github.com/minio/minio/pkg/console"
 )
@@ -200,19 +201,19 @@ func (f *fsClient) Watch(ctx context.Context, options WatchOptions) (*WatchObjec
 					Time: UTCNow().Format(timeFormatFS),
 					Size: i.Size(),
 					Path: event.Path(),
-					Type: EventCreate,
+					Type: notification.ObjectCreatedPut,
 				}}
 			} else if IsDeleteEvent(event.Event()) {
 				eventChan <- []EventInfo{{
 					Time: UTCNow().Format(timeFormatFS),
 					Path: event.Path(),
-					Type: EventRemove,
+					Type: notification.ObjectRemovedDelete,
 				}}
 			} else if IsGetEvent(event.Event()) {
 				eventChan <- []EventInfo{{
 					Time: UTCNow().Format(timeFormatFS),
 					Path: event.Path(),
-					Type: EventAccessed,
+					Type: notification.ObjectAccessedGet,
 				}}
 			}
 		}
@@ -506,14 +507,14 @@ func (f *fsClient) List(ctx context.Context, opts ListOptions) <-chan *ClientCon
 	contentCh := make(chan *ClientContent)
 	filteredCh := make(chan *ClientContent)
 
-	if opts.isRecursive {
-		if opts.showDir == DirNone {
-			go f.listRecursiveInRoutine(contentCh, opts.isFetchMeta)
+	if opts.Recursive {
+		if opts.ShowDir == DirNone {
+			go f.listRecursiveInRoutine(contentCh, opts.WithMetadata)
 		} else {
-			go f.listDirOpt(contentCh, opts.isIncomplete, opts.isFetchMeta, opts.showDir)
+			go f.listDirOpt(contentCh, opts.Incomplete, opts.WithMetadata, opts.ShowDir)
 		}
 	} else {
-		go f.listInRoutine(contentCh, opts.isFetchMeta)
+		go f.listInRoutine(contentCh, opts.WithMetadata)
 	}
 
 	// This function filters entries from any  listing go routine
@@ -521,7 +522,7 @@ func (f *fsClient) List(ctx context.Context, opts ListOptions) <-chan *ClientCon
 	// only show partly uploaded files,
 	go func() {
 		for c := range contentCh {
-			if opts.isIncomplete {
+			if opts.Incomplete {
 				if !strings.HasSuffix(c.URL.Path, partSuffix) {
 					continue
 				}

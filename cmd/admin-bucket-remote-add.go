@@ -20,10 +20,13 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 
+<<<<<<< HEAD
 	"github.com/dustin/go-humanize"
+=======
+	humanize "github.com/dustin/go-humanize"
+>>>>>>> origin/master
 	"github.com/fatih/color"
 	"github.com/minio/cli"
 	json "github.com/minio/mc/pkg/colorjson"
@@ -41,28 +44,42 @@ var adminBucketRemoteAddFlags = []cli.Flag{
 	},
 	cli.StringFlag{
 		Name:  "service",
-		Usage: "type of service. Valid options are '[replication]'",
+		Usage: "type of service. Valid options are '[replication, ilm]'",
 	},
 	cli.StringFlag{
 		Name:  "region",
 		Usage: "region of the destination bucket (optional)",
 	},
 	cli.StringFlag{
+<<<<<<< HEAD
 		Name: "bandwidth",
 		Usage: "Per second bandwidth limit (optional). Can be specified human-readable case-insensitive number suffixes\n\tsuch as k, m, g and t referring to the metric units KB, MB, GB and TB respectively. \n\tAdding an i to these prefixes, uses the IEC  units, so that gi refers to gibibyte or iB. \n\tA b at the end is  also accepted. Without suffixes the unit is bytes.",
+=======
+		Name:  "label",
+		Usage: "set a label to identify this target (optional)",
+	},
+	cli.StringFlag{
+		Name:  "bandwidth",
+		Usage: "Set bandwidth limit in bits per second (K,B,G,T for metric and Ki,Bi,Gi,Ti for IEC units)",
+>>>>>>> origin/master
 	},
 }
 var adminBucketRemoteAddCmd = cli.Command{
-	Name:   "add",
-	Usage:  "add a new remote target",
-	Action: mainAdminBucketRemoteAdd,
-	Before: setGlobalsFromContext,
-	Flags:  append(globalFlags, adminBucketRemoteAddFlags...),
+	Name:         "add",
+	Usage:        "add a new remote target",
+	Action:       mainAdminBucketRemoteAdd,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(globalFlags, adminBucketRemoteAddFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
 USAGE:
+<<<<<<< HEAD
   {{.HelpName}} TARGET http(s)://ACCESSKEY:SECRETKEY@DEST_URL/DEST_BUCKET [--path | --region | --bandwidth] --service
+=======
+  {{.HelpName}} TARGET http(s)://ACCESSKEY:SECRETKEY@DEST_URL/DEST_BUCKET [--path | --region | --label| --bandwidth] --service
+>>>>>>> origin/master
 
 TARGET:
   Also called as alias/sourcebucketname
@@ -83,11 +100,18 @@ FLAGS:
   {{range .VisibleFlags}}{{.}}
   {{end}}
 EXAMPLES:
-  1. Set a new remote replication target 'replicabucket' in region "us-west-1" on https://minio2:9000 for bucket 'srcbucket' on MinIO server.
+  1. Set a new remote replication target "targetbucket" in region "us-west-1" on https://minio.siteb.example.com for bucket 'sourcebucket'.
+     {{.Prompt}} {{.HelpName}} sitea/sourcebucket https://foobar:foo12345@minio.siteb.example.com/targetbucket \
+         --service "replication" --region "us-west-1" --label "hdd-tier"
+
+  2. Set a new remote replication target 'targetbucket' in region "us-west-1" on https://minio.siteb.example.com for
+     bucket 'sourcebucket' with bandwidth set to 2 gigabits (2*10^9) per second.
+     {{.Prompt}} {{.HelpName}} sitea/sourcebucket https://foobar:foo12345@minio.siteb.example.com/targetbucket \
+         --service "replication" --region "us-west-1 --bandwidth "2G"
+
+  3. Set a new remote transition target 'srcbucket' in region "us-west-1" on https://minio2:9000 for bucket 'srcbucket' on MinIO server.
      {{.DisableHistory}}
-     {{.Prompt}} {{.HelpName}} myminio/srcbucket \
-                 https://foobar:foo12345@minio2:9000/replicabucket \
-                 --service "replication" --region "us-west-1"
+     {{.Prompt}} {{.HelpName}} myminio/srcbucket https://foobar:foo12345@minio2:9000/srcbucket --service "ilm" --region "us-west-1" --label "hdd-tier"
      {{.EnableHistory}}
 `,
 }
@@ -117,6 +141,7 @@ type RemoteMessage struct {
 	Path         string `json:"path,omitempty"`
 	Region       string `json:"region,omitempty"`
 	ServiceType  string `json:"service"`
+	TargetLabel  string `json:"TargetLabel"`
 	Bandwidth    int64  `json:"bandwidth"`
 }
 
@@ -124,6 +149,10 @@ func (r RemoteMessage) String() string {
 	switch r.op {
 	case "ls":
 		message := console.Colorize("TargetURL", fmt.Sprintf("%s ", r.TargetURL))
+		if r.TargetLabel != "" {
+			message += console.Colorize("TargetLabel", fmt.Sprintf("%s ", r.TargetLabel))
+		}
+
 		message += console.Colorize("SourceBucket", r.SourceBucket)
 		message += console.Colorize("Arrow", "->")
 		message += console.Colorize("TargetBucket", r.TargetBucket)
@@ -134,6 +163,8 @@ func (r RemoteMessage) String() string {
 		return console.Colorize("RemoteMessage", "Removed remote target for `"+r.SourceBucket+"` bucket successfully.")
 	case "add":
 		return console.Colorize("RemoteMessage", "Remote ARN = `"+r.RemoteARN+"`.")
+	case "edit":
+		return console.Colorize("RemoteMessage", "Credentials updated successfully for target with ARN:`"+r.RemoteARN+"`.")
 	}
 	return ""
 }
@@ -176,37 +207,42 @@ func fetchRemoteTarget(cli *cli.Context) (sourceBucket string, bktTarget *madmin
 	if cerr != nil {
 		fatalIf(probe.NewError(cerr), "Malformed Remote target URL")
 	}
-	secure := u.Scheme == "https"
-	host := u.Host
-	if u.Port() == "" {
-		port := 80
-		if secure {
-			port = 443
-		}
-		host = host + ":" + strconv.Itoa(port)
-	}
+
 	serviceType := cli.String("service")
 	if !madmin.ServiceType(serviceType).IsValid() {
 		fatalIf(errInvalidArgument().Trace(serviceType), "Invalid service type. Valid option is `[replication]`.")
 	}
 	bandwidthStr := cli.String("bandwidth")
-	bandwidth, e := humanize.ParseBytes(bandwidthStr)
-	fatalIf(probe.NewError(e).Trace(bandwidthStr), "Unable to parse quota")
-	fmt.Printf("bandwidth:%d\n", bandwidth)
+	bandwidth, err := getBandwidthInBytes(bandwidthStr)
+	if err != nil {
+		fatalIf(errInvalidArgument().Trace(bandwidthStr), "Invalid bandwidth number")
+	}
 	console.SetColor(cred, color.New(color.FgYellow, color.Italic))
 	creds := &auth.Credentials{AccessKey: accessKey, SecretKey: secretKey}
 	bktTarget = &madmin.BucketTarget{
-		TargetBucket: TargetBucket,
-		Secure:       secure,
-		Credentials:  creds,
-		Endpoint:     host,
-		Path:         path,
-		API:          "s3v4",
-		Type:         madmin.ServiceType(serviceType),
-		Region:       cli.String("region"),
+		TargetBucket:   TargetBucket,
+		Secure:         u.Scheme == "https",
+		Credentials:    creds,
+		Endpoint:       u.Host,
+		Path:           path,
+		API:            "s3v4",
+		Type:           madmin.ServiceType(serviceType),
+		Region:         cli.String("region"),
 		BandwidthLimit: int64(bandwidth),
+		Label:          strings.ToUpper(cli.String("label")),
 	}
 	return sourceBucket, bktTarget
+}
+
+func getBandwidthInBytes(bandwidthStr string) (bandwidth uint64, err error) {
+	if bandwidthStr != "" {
+		bandwidth, err = humanize.ParseBytes(bandwidthStr)
+		if err != nil {
+			return
+		}
+	}
+	bandwidth = bandwidth / 8
+	return
 }
 
 // mainAdminBucketRemoteAdd is the handle for "mc admin bucket remote set" command.
@@ -223,6 +259,9 @@ func mainAdminBucketRemoteAdd(ctx *cli.Context) error {
 	fatalIf(cerr, "Unable to initialize admin connection.")
 
 	sourceBucket, bktTarget := fetchRemoteTarget(ctx)
+	if bktTarget.Type == madmin.ILMService && !ctx.IsSet("label") {
+		fatalIf(errInvalidArgument().Trace(args...), "--label flag is required for ilm target")
+	}
 	arn, e := client.SetRemoteTarget(globalContext, sourceBucket, bktTarget)
 	if e != nil {
 		fatalIf(probe.NewError(e).Trace(args...), "Unable to configure remote target")
@@ -230,7 +269,7 @@ func mainAdminBucketRemoteAdd(ctx *cli.Context) error {
 
 	printMsg(RemoteMessage{
 		op:           ctx.Command.Name,
-		TargetURL:    bktTarget.URL(),
+		TargetURL:    bktTarget.URL().String(),
 		TargetBucket: bktTarget.TargetBucket,
 		AccessKey:    bktTarget.Credentials.AccessKey,
 		SourceBucket: sourceBucket,

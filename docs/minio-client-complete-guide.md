@@ -19,12 +19,11 @@ stat        show object metadata
 mv          move objects
 tree        list buckets and objects in a tree format
 du          summarize disk usage recursively
-retention   set retention for object(s)
+retention   set retention for object(s) and bucket(s)
 legalhold   set legal hold for object(s)
 diff        list differences in object name, size, and date between two buckets
 rm          remove objects
 version     manage bucket versioning
-lock        manage default bucket object lock configuration
 ilm         manage bucket lifecycle
 encrypt     manage bucket encryption config
 event       manage object notifications
@@ -308,9 +307,9 @@ mc version RELEASE.2020-04-25T00-43-23Z
 | [**share** - generate URL for temporary access to an object](#share)                    | [**rm** - remove objects](#rm)                                      | [**find** - find files and objects](#find)                 | [**undo** - undo PUT/DELETE operations](#undo)     |
 | [**diff** - list differences in object name, size, and date between two buckets](#diff) | [**mirror** - synchronize object(s) to a remote site](#mirror)      | [**ilm** - manage bucket lifecycle policies](#ilm)         | [**replicate** - manage bucket server side replication](#replicate) |
 | [**alias** - manage aliases](#alias)                                                    | [**policy** - set public policy on bucket or prefix](#policy)       | [**event** - manage events on your buckets](#event)        | [**encrypt** - manage bucket encryption](#encrypt) |
-| [**update** - manage software updates](#update)                                         | [**watch** - watch for events](#watch)                              | [**stat** - stat contents of objects and folders](#stat)   |                                                    |
-| [**head** - display first 'n' lines of an object](#head)                                | [**lock** - manage default bucket object lock configuration](#lock) | [**retention** - set retention for object(s)](#retention)  |                                                    |
-| [**mv** - move objects](#mv)                                                            | [**sql** - run sql queries on objects](#sql)                        | [**legalhold** - set legal hold for object(s)](#legalhold) |                                                    |
+| [**update** - manage software updates](#update)                                         | [**watch** - watch for events](#watch)                              | [**retention** - set retention for object(s)](#retention)  | [**sql** - run sql queries on objects](#sql)       |
+| [**head** - display first 'n' lines of an object](#head)                                | [**stat** - stat contents of objects and folders](#stat)            | [**legalhold** - set legal hold for object(s)](#legalhold) | [**mv** - move objects](#mv)                       |
+
 
 
 ###  Command `ls`
@@ -597,41 +596,23 @@ Hello!!
 ### Command `lock`
 `lock` sets and gets object lock configuration
 
-```
-USAGE:
-   mc lock TARGET [info | clear ] | [[governance | compliance] [VALIDITY]]
-
-FLAGS:
-  --json                        enable JSON formatted output
-  --help, -h                    show help
-```
-
-*Example: Set object lock configuration of 30 day compliance on bucket `mybucket`*
-
-```
-mc lock myminio/mybucket compliance 30d
-```
-
-*Example: Display the object lock configuration for bucket `mybucket`*
-
-```
-mc lock myminio/mybucket info
-COMPLIANCE mode is enabled for 30d
-```
-*Example: Clear object lock configuration for bucket `mybucket`*
-
-```
-mc lock myminio/mybucket clear
-Object lock configuration cleared successfully
-```
+> `RELEASE.2020-09-18T00-13-21Z` deprecates and removes the `lock` command.
+The [retention](#retention) command fully replaces `lock` functionality.
 
 <a name="retention"></a>
 ### Command `retention`
-`retention` sets object retention for objects with a given prefix
+`retention` sets object retention for objects with a given prefix *or* the default
+retention settings for a bucket.
 
 ```
 USAGE:
-   mc retention [FLAGS] TARGET [governance | compliance] [VALIDITY]
+   mc retention COMMAND [FLAGS | -h] [ARGUMENTS...]
+
+COMMANDS:
+  set           Sets retention for object(s) or bucket
+  clear         Clears retention for object(s) or bucket
+  info          Returns retention for object(s) or bucket
+  help, h       Shows a list of commands or help for one command
 
 FLAGS:
   --bypass                      bypass governance
@@ -643,7 +624,7 @@ FLAGS:
 *Example: Set governance for 30 days for object `prefix` on bucket `mybucket`*
 
 ```
-mc retention myminio/mybucket/prefix governance 30d -r
+mc retention set governance 30d myminio/mybucket/prefix -r
 Object retention successfully set for objects with prefix `myminio/mybucket/prefix`.
 
 ```
@@ -656,13 +637,35 @@ Removing `myminio/mybucket/prefix/comp.csv`.
 mc: <ERROR> Failed to remove `myminio/mybucket/prefix/comp.csv`. Object is WORM protected and cannot be overwritten
 ```
 
+*Example: Set compliance for 30 days as default retention setting on bucket `mybucket`*
+
+```
+mc retention set --default compliance 30d myminio/mybucket
+```
+
+*Objects created in the above bucket `mybucket` cannot be deleted until the compliance period is over*
+
+```
+mc cp ~/comp.csv myminio/mybucket/data.csv
+mc rm myminio/mybucket/data.csv
+Removing `myminio/mybucket/data.csv
+mc: <ERROR> Failed to remove `myminio/mybucket/data.csv`. Object is WORM protected and cannot be overwritten
+```
+
+
 <a name="legalhold"></a>
 ### Command `legalhold`
 `legalhold` sets object legal hold for objects
 
 ```
 USAGE:
-   mc legalhold [FLAGS] TARGET [ON | OFF]
+   mc legalhold COMMAND [FLAGS | -h] TARGET
+
+COMMANDS:
+  set      set legal hold for object(s)
+  clear    clear legal hold for object(s)
+  info     show legal hold info for object(s)
+  help, h  Shows a list of commands or help for one command
 
 FLAGS:
   --recursive, -r               apply legal hold recursively
@@ -673,7 +676,7 @@ FLAGS:
 *Example: Enable legal hold for objects with prefix `prefix` on bucket `mybucket`*
 
 ```
-mc legalhold myminio/mybucket/prefix ON -r
+mc legalhold set myminio/mybucket/prefix -r
 Object legal hold successfully set for prefix `myminio/mybucket/prefix`.
 
 ```
@@ -681,7 +684,6 @@ Object legal hold successfully set for prefix `myminio/mybucket/prefix`.
 
 ```
 mc cp ~/test.csv myminio/mybucket/prefix/
-mc legalhold myminio/mybucket/prefix/test.csv ON
 mc rm myminio/mybucket/prefix/test.csv
 Removing `myminio/mybucket/prefix/test.csv`.
 mc: <ERROR> Failed to remove `myminio/mybucket/prefix/test.csv`. Object is WORM protected and cannot be overwritten
@@ -1041,14 +1043,14 @@ COMMAND:
 
 <a name="mirror"></a>
 ### Command `mirror`
-`mirror` command is similar to `rsync`, except it synchronizes contents between filesystems and object storage.
+`mirror` command synchornizes data between filesystems and object storages, similarly to `rsync`.
 
 ```
 USAGE:
    mc mirror [FLAGS] SOURCE TARGET
 
 FLAGS:
-  --overwrite                        overwrite object(s) on target
+  --overwrite                        overwrite object(s) on target if it differs from source
   --fake                             perform a fake mirror operation
   --watch, -w                        watch and synchronize changes
   --remove                           remove extraneous object(s) on target
@@ -1257,9 +1259,10 @@ USAGE:
   mc ilm COMMAND [COMMAND FLAGS | -h] [ARGUMENTS...]
 
 COMMANDS:
-  list    pretty print bucket lifecycle configuration
+  ls      list lifecycle configuration rules set on a bucket
   add     add a lifecycle configuration rule to existing (if any) rule(s) on a bucket
-  remove  remove (if any) existing lifecycle configuration rule with the id
+  rm      remove (if any) existing lifecycle configuration rule
+  edit    modify a lifecycle configuration rule with given id
   export  export lifecycle configuration in JSON format
   import  import lifecycle configuration in JSON format
 
@@ -1271,7 +1274,7 @@ FLAGS:
 *Example: List the lifecycle management rules*
 
 ```
-mc ilm list myminio/testbucket
+mc ilm ls myminio/testbucket
    ID    | Prefix | Enabled | Expiry |  Date/Days   | Transition | Date/Days | Storage-Class | Tags
 ---------|--------|---------|--------|--------------|------------|-----------|---------------|------
  Devices |  dev/  |    ✓    |   ✓   | 17 Sep 2020  |     ✗      |           |               |
@@ -1281,16 +1284,21 @@ mc ilm list myminio/testbucket
 For more details about the lifecycle configuration, refer to official AWS S3 documentation [here](https://docs.aws.amazon.com/AmazonS3/latest/dev/intro-lifecycle-rules.html)
 
 
-*Example: Add rule for testbucket on play*
+*Example: Add rule for prefix "dev" in bucket "testbucket" on play and transition after 2 days to transition tier specified by storage class label "hdd_tier". "hdd_tier" is the label specified when setting up MinIO transition target via `mc admin bucket remote add` command*
 ```
-mc ilm add --id "Devices" --prefix "dev/" --expiry-date "2020-09-17" play/testbucket
-Lifecycle configuration rule added with ID `Devices` to play/testbucket.
+mc ilm add --expiry-date "2020-09-17" play/testbucket/dev --transition-days 2 --storage-class "hdd_tier"
+Lifecycle configuration rule added with ID `btd6pdot8748n94elvl0` to play/testbucket/dev.
+```
+*Example: Edit the lifecycle management configuration rule given by ID "btd6pdot8748n94elvl0" to set tags*
+```
+mc ilm edit --id "Documents" --tags "k1=v1&k2=v2" play/testbucket/dev
+Lifecycle configurtaion rule with ID `btd6pdot8748n94elvl0` modified to play/testbucket/dev.
 ```
 
 *Example: Remove the lifecycle management configuration rule given by ID "Documents"*
 ```
-mc ilm remove --id "Documents" play/testbucket
-Rule ID `Documents` from target play/testbucket removed.
+mc ilm rm --id "Documents" play/testbucket/dev
+Rule ID `Documents` from target play/testbucket/dev removed.
 ```
 
 <a name="policy"></a>
@@ -1498,6 +1506,7 @@ Metadata  :
   Location: us-east-1
   Tagging: key1:value1, key2:value2
   ILM: Not Set
+```
 
 *Example: Display information on an encrypted object "myobject" in "mybucket" on https://play.min.io.*
 
@@ -1593,6 +1602,7 @@ FLAGS:
 ```
 
 *Example:  Undo the last 3 uploads and/or removals of a particular object*
+
 ```
 mc undo s3/backups/file.zip --last 3
 ✓ Last delete of `CREDITS` is reverted.
@@ -1633,6 +1643,7 @@ Algorithm: AES256
 mc encrypt set sse-s3 myminio/mybucket
 Auto encryption has been set successfully for myminio/source
 ```
+
 *Example: Set SSE-KMS auto encryption for bucket `mybucket` on alias `myminio` with KMS Key Id "arn:aws:kms:us-east-1:xxx:key/xxx"*
 
 ```
@@ -1660,7 +1671,7 @@ USAGE:
 
 COMMANDS:
   add     add a server side replication configuration rule
-  set     modify an existing server side replication cofiguration rule
+  edit    modify an existing server side replication cofiguration rule
   ls      list server side replication configuration rules
   export  export server side replication configuration
   import  import server side replication configuration in JSON format
@@ -1670,33 +1681,46 @@ FLAGS:
   --help, -h                    show help
 ```
 
-*Example: Add replication configuration rule on `mybucket` on alias `myminio`*
+*Example: Add replication configuration rule on `mybucket` on alias `myminio`.Enable delete marker replication and replication of versioned deletes for the configuration*
 
 ```
-mc replicate add myminio/mybucket/prefix --tags "key1=value1&key2=value2" --storage-class "STANDARD" --arn 'arn:minio:replication:us-east-1:c5be6b16-769d-432a-9ef1-4567081f3566:destbucket' --priority 1 --remote-bucket destbucket
+mc replicate add myminio/mybucket/prefix --tags "key1=value1&key2=value2" --storage-class "STANDARD" --arn 'arn:minio:replication:us-east-1:c5be6b16-769d-432a-9ef1-4567081f3566:destbucket' --priority 1 --remote-bucket destbucket --replicate "delete-marker,delete"
 Replication configuration rule applied to myminio/mybucket/prefix.
 ```
 
 *Example:  Disable replication configuration rule with rule Id "bsibgh8t874dnjst8hkg" on bucket "mybucket" with prefix "prefix" for alias `myminio`*
 
 ```
-mc replicate set myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --state disable
+mc replicate edit myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --state disable
 Replication configuration rule with ID `bsibgh8t874dnjst8hkg` applied to myminio/mybucket/prefix.
 ```
+
 *Example:  Change priority of rule with rule ID "bsibgh8t874dnjst8hkg" on bucket "mybucket" for alias `myminio`.*
 
 ```
-mc replicate set myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --priority 3
+mc replicate edit myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --priority 3
 Replication configuration rule with ID `bsibgh8t874dnjst8hkg` applied to myminio/mybucket/prefix.
 ```
 
-*Example: Clear tags on rule ID "bsibgh8t874dnjst8hkg" for target myminio/bucket which has a replication configuration rule with prefix "prefix"
+*Example: Clear tags on rule ID "bsibgh8t874dnjst8hkg" for target myminio/bucket which has a replication configuration rule with prefix "prefix"*
 
 ```
-mc replicate set myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --tags ""
+mc replicate edit myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --tags ""
 Replication configuration rule with ID `bsibgh8t874dnjst8hkg` applied to myminio/mybucket/prefix successfully.
 ```
 
+*Example: Enable delete marker replication and versioned delete replication on rule ID "bsibgh8t874dnjst8hkg" for target myminio/bucket which has a replication configuration rule with prefix "prefix"
+
+```
+mc replicate edit myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --replicate "delete,delete-marker"
+Replication configuration rule with ID `bsibgh8t874dnjst8hkg` applied to myminio/mybucket/prefix successfully.
+```
+*Example: Disable delete marker and versioned delete replication on rule ID "bsibgh8t874dnjst8hkg" for target myminio/bucket which has a replication configuration rule with prefix "prefix"
+
+```
+mc replicate edit myminio/mybucket/prefix --id "bsibgh8t874dnjst8hkg" --replicate ""
+Replication configuration rule with ID `bsibgh8t874dnjst8hkg` applied to myminio/mybucket/prefix successfully.
+```
 *Example: List replication configuration rules set on `mybucket` on alias `myminio`*
 
 ```

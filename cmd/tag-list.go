@@ -48,11 +48,12 @@ var tagListFlags = []cli.Flag{
 }
 
 var tagListCmd = cli.Command{
-	Name:   "list",
-	Usage:  "list tags of a bucket or an object",
-	Action: mainListTag,
-	Before: setGlobalsFromContext,
-	Flags:  append(tagListFlags, globalFlags...),
+	Name:         "list",
+	Usage:        "list tags of a bucket or an object",
+	Action:       mainListTag,
+	OnUsageError: onUsageError,
+	Before:       setGlobalsFromContext,
+	Flags:        append(tagListFlags, globalFlags...),
 	CustomHelpTemplate: `NAME:
   {{.HelpName}} - {{.Usage}}
 
@@ -193,7 +194,7 @@ func mainListTag(cliCtx *cli.Context) error {
 	if timeRef.IsZero() && !withVersions {
 		showTags(ctx, clnt, versionID, true)
 	} else {
-		for content := range clnt.List(ctx, ListOptions{timeRef: timeRef, withOlderVersions: withVersions}) {
+		for content := range clnt.List(ctx, ListOptions{TimeRef: timeRef, WithOlderVersions: withVersions}) {
 			if content.Err != nil {
 				fatalIf(content.Err.Trace(), "Unable to list target "+targetURL)
 			}

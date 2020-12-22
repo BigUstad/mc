@@ -175,15 +175,15 @@ func statURL(ctx context.Context, targetURL, versionID string, timeRef time.Time
 	if !strings.HasSuffix(prefixPath, separator) {
 		prefixPath = prefixPath[:strings.LastIndex(prefixPath, separator)+1]
 	}
-	lstOptions := ListOptions{isRecursive: isRecursive, isIncomplete: isIncomplete, showDir: DirNone}
+	lstOptions := ListOptions{Recursive: isRecursive, Incomplete: isIncomplete, ShowDir: DirNone}
 	switch {
 	case versionID != "":
-		lstOptions.withOlderVersions = true
-		lstOptions.withDeleteMarkers = true
-	case !timeRef.IsZero():
-		lstOptions.withOlderVersions = includeOlderVersions
-		lstOptions.withDeleteMarkers = true
-		lstOptions.timeRef = timeRef
+		lstOptions.WithOlderVersions = true
+		lstOptions.WithDeleteMarkers = true
+	case !timeRef.IsZero(), includeOlderVersions:
+		lstOptions.WithOlderVersions = includeOlderVersions
+		lstOptions.WithDeleteMarkers = true
+		lstOptions.TimeRef = timeRef
 	}
 	var cErr error
 	for content := range clnt.List(ctx, lstOptions) {
@@ -224,8 +224,7 @@ func statURL(ctx context.Context, targetURL, versionID string, timeRef time.Time
 				continue
 			}
 		}
-
-		clnt, stat, err := url2Stat(ctx, url, versionID, true, encKeyDB, timeRef)
+		clnt, stat, err := url2Stat(ctx, url, content.VersionID, true, encKeyDB, timeRef)
 		if err != nil {
 			continue
 		}
