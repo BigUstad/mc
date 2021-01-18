@@ -39,6 +39,7 @@ var adminCmdSubcommands = []cli.Command{
 	adminConfigCmd,
 	adminHealCmd,
 	adminProfileCmd,
+	adminBwInfoCmd,
 	adminTopCmd,
 	adminTraceCmd,
 	adminConsoleCmd,
@@ -57,25 +58,6 @@ var adminCmd = cli.Command{
 	HideHelpCommand: true,
 	Before:          setGlobalsFromContext,
 	Flags:           append(adminFlags, globalFlags...),
-	Subcommands: []cli.Command{
-		adminServiceCmd,
-		adminServerUpdateCmd,
-		adminInfoCmd,
-		adminUserCmd,
-		adminGroupCmd,
-		adminPolicyCmd,
-		adminConfigCmd,
-		adminHealCmd,
-		adminProfileCmd,
-		adminTopCmd,
-		adminBwInfoCmd,
-		adminTraceCmd,
-		adminConsoleCmd,
-		adminPrometheusCmd,
-		adminKMSCmd,
-		adminOBDCmd,
-		adminBucketCmd,
-	},
 }
 
 const dateTimeFormatFilename = "2006-01-02T15-04-05.999999-07-00"
